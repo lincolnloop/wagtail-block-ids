@@ -1,0 +1,109 @@
+[project]
+name = "wagtail-block-ids"
+version = "0.1.0"
+description = "Mark rendered StreamField blocks with data-block-id, for tools that map the page back to its blocks"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+keywords = ["wagtail", "django", "cms", "blocks", "streamfield", "preview"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Framework :: Django",
+  "Framework :: Django :: 4.2",
+  "Framework :: Django :: 5.2",
+  "Framework :: Django :: 6.0",
+  "Framework :: Wagtail",
+  "Framework :: Wagtail :: 5",
+  "Framework :: Wagtail :: 6",
+  "Framework :: Wagtail :: 7",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+]
+requires-python = ">=3.12"
+# Same floor as wagtail-inspect, the widest consumer.
+dependencies = ["django>=4.2", "wagtail>=5.0"]
+
+[project.optional-dependencies]
+testing = [
+  "coverage[toml]>=7.0",
+  "pre-commit>=4.0",
+  "pytest>=8.0",
+  "pytest-django>=4.0",
+  "ruff>=0.15.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/lincolnloop/wagtail-block-ids"
+Repository = "https://github.com/lincolnloop/wagtail-block-ids"
+Changelog = "https://github.com/lincolnloop/wagtail-block-ids/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/lincolnloop/wagtail-block-ids/issues"
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist =
+    py312-django42-wagtail{5,6,7}
+    py312-django52-wagtail7
+    py314-django60-wagtail7
+
+[testenv]
+runner = uv-venv-runner
+package = editable
+deps =
+    django42: Django>=4.2,<5.0
+    django52: Django>=5.2,<6.0
+    django60: Django>=6.0,<6.1
+    wagtail5: wagtail>=5.0,<6.0
+    wagtail6: wagtail>=6.0,<7.0
+    wagtail7: wagtail>=7.0,<8.0
+    pytest>=8.0
+    pytest-django>=4.0
+commands =
+    pytest {posargs}
+"""
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+pythonpath = [".", "tests"]
+django_find_project = false
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["wagtail_block_ids"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py312"
+exclude = [".git", ".tox", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+ignore = ["ISC001", "D203", "D213"]
+select = [
+  "ANN", "ARG", "B", "C4", "C90", "D", "DJ", "DTZ", "E", "EM", "F", "G", "I", "ISC", "LOG", "N",
+  "PIE", "PT", "PTH", "RET", "RUF", "Q", "SIM", "T10", "TCH", "TRY", "UP",
+]
+fixable = ["ALL"]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "ARG", "D", "EM101", "PTH", "PT", "RET504", "RUF012", "RUF015", "S101", "TRY003", "E501"]
+"src/wagtail_block_ids/**" = ["ANN", "D"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
