@@ -9,10 +9,17 @@ def _id():
 
 
 def demo_stream():
-    """``body`` with a heading and a section holding text and a card grid; ``sidebar`` with a note."""
+    """``body``: a heading, a section holding text and a card grid, and a list of tags.
+
+    ``sidebar``: a note.
+    """
     cards = [
         {"type": "item", "id": _id(), "value": {"headline": "First card", "link_text": "Read more"}},
         {"type": "item", "id": _id(), "value": {"headline": "Second card", "link_text": ""}},
+    ]
+    tags = [
+        {"type": "item", "id": _id(), "value": "News"},
+        {"type": "item", "id": _id(), "value": "Events"},
     ]
     content = [
         {"type": "text", "id": _id(), "value": "<p>Section copy</p>"},
@@ -23,6 +30,7 @@ def demo_stream():
             [
                 {"type": "heading", "id": _id(), "value": "Welcome"},
                 {"type": "section", "id": _id(), "value": {"style": "plain", "content": content}},
+                {"type": "tags", "id": _id(), "value": tags},
             ]
         ),
         "sidebar": json.dumps([{"type": "note", "id": _id(), "value": "Sidebar note"}]),

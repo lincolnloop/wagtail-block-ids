@@ -18,7 +18,7 @@ Apps register with ``register_page_marker`` (from ``AppConfig.ready()``) or open
 
 import contextlib
 import logging
-import re
+import weakref
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -35,11 +35,11 @@ try:
 except ImportError:  # pragma: no cover - Wagtail 5 layout
     from wagtail.models import PreviewableMixin
 
-from .blocks import resolve_block_label, resolve_block_type
+from .blocks import describe
 
 logger = logging.getLogger(__name__)
 
-TESTED_WAGTAIL_VERSIONS = ((5,), (6,), (7,))
+TESTED_WAGTAIL_VERSIONS = ((5,), (6,), (7,), (8,))
 
 _originals: dict = {}
 
@@ -60,6 +60,11 @@ class _Marker:
 
 
 _markers: list[_Marker] = []
+
+# ListChild -> its ListBlock, recorded while iterating a ListValue. A ListChild doesn't
+# know its list, and render_as_block calls render, so the child's own render is the one
+# marked: it needs the list here to be named as the walk names it.
+_list_parents: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def is_marking() -> bool:
@@ -92,10 +97,6 @@ def register_page_marker(should_mark: Callable, *, wrap: bool = False) -> None:
     _markers.append(_Marker(should_mark=should_mark, wrap=wrap))
 
 
-# Matches the opening token of the first HTML element tag (e.g. "<div", "<section").
-# Used by _inject_attrs_into_root to locate the injection point.
-_FIRST_TAG_RE = re.compile(r"<[a-zA-Z][a-zA-Z0-9:-]*")
-
 # Void elements have no closing tag and do not affect nesting depth.
 _VOID_ELEMENTS = frozenset(
     {
@@ -116,16 +117,30 @@ _VOID_ELEMENTS = frozenset(
 )
 
 
-class _RootCounter(HTMLParser):
-    def reset(self) -> None:
-        super().reset()
+class _Fragment(HTMLParser):
+    """The top level of an HTML fragment: its roots, loose text, and first root's start tag.
+
+    One parse per fragment, so concurrent renders never share state.
+    """
+
+    def __init__(self, html: str) -> None:
+        super().__init__()
         self.depth = 0
         self.roots = 0
-        self.top_text = 0
+        self.loose_text = False
+        self.first_tag = ""  # The first root's start tag, as written.
+        self.attrs_at = None  # Offset just after the first root's tag name.
+        self._html = html
+        self.feed(html)
+        self.close()
 
     def handle_starttag(self, tag, _attrs) -> None:
         if not self.depth:
             self.roots += 1
+            if self.attrs_at is None:
+                line, col = self.getpos()
+                self.first_tag = self.get_starttag_text()
+                self.attrs_at = _offset(self._html, line, col) + 1 + len(tag)
         if tag not in _VOID_ELEMENTS:
             self.depth += 1
 
@@ -135,44 +150,44 @@ class _RootCounter(HTMLParser):
 
     def handle_data(self, data) -> None:
         if not self.depth and data.strip():
-            self.top_text += 1
+            self.loose_text = True
 
 
-_root_counter = _RootCounter()
+def _offset(text, line, col):
+    """Offset in *text* of ``HTMLParser.getpos()``'s 1-based *line* and 0-based *col*."""
+    start = 0
+    for _ in range(line - 1):
+        start = text.index("\n", start) + 1
+    return start + col
 
 
-def _is_multi_root_fragment(html: str) -> bool:
-    """True if fragment has multiple roots or text siblings (markdown-style)."""
-    _root_counter.reset()
-    _root_counter.feed(html)
-    return _root_counter.roots > 1 or (_root_counter.roots == 1 and _root_counter.top_text > 0)
-
-
-def _inject_attrs_into_root(output, block_id, block_type, block_label):
-    """Insert ``data-block-*`` after the first start tag; return ``(out, ok)``."""
-    attrs = (
-        f' data-block-id="{conditional_escape(block_id)}"'
-        f' data-block-type="{conditional_escape(block_type)}"'
-        f' data-block-label="{conditional_escape(block_label)}"'
-    )
-    result, n = _FIRST_TAG_RE.subn(
-        lambda m: m.group(0) + attrs,
-        str(output),
-        count=1,
-    )
-    if n:
-        return mark_safe(result), True
-    return output, False
-
-
-def _wrapper(bound, content, block_type, block_label):
+def _data_attrs(info):
     return format_html(
-        '<div data-block-id="{}" data-block-type="{}" data-block-label="{}" style="display:contents">{}</div>',
-        bound.id,
-        block_type,
-        block_label,
-        content,
+        ' data-block-id="{}" data-block-type="{}" data-block-label="{}"',
+        info.id,
+        info.type,
+        info.label,
     )
+
+
+def mark_html(html, info, *, wrap):
+    """Add *info*'s ``data-block-*`` attributes to the root element of a block's rendered *html*.
+
+    With ``wrap``, output with no root element, several, or text beside the root is
+    wrapped in a ``display:contents`` div instead. Output that is already marked for
+    *info*, or has no root element and may not be wrapped, comes back unchanged.
+    """
+    text = str(html)
+    fragment = _Fragment(text)
+    at = fragment.attrs_at
+    if f'data-block-id="{conditional_escape(info.id)}"' in fragment.first_tag:
+        return html  # Already marked (render_as_block calling render).
+    if wrap and (at is None or fragment.roots > 1 or fragment.loose_text):
+        content = html if at is None else mark_safe(text)
+        return format_html('<div{} style="display:contents">{}</div>', _data_attrs(info), content)
+    if at is None:
+        return html
+    return mark_safe(text[:at] + _data_attrs(info) + text[at:])
 
 
 def _mark(bound, output):
@@ -180,19 +195,7 @@ def _mark(bound, output):
     scope = _scope.get()
     if scope is None or not getattr(bound, "id", None):
         return output
-    html = str(output)
-    match = _FIRST_TAG_RE.search(html)
-    if match:
-        tag_end = html.find(">", match.end())
-        first_tag = html[match.start() : tag_end if tag_end != -1 else len(html)]
-        if f'data-block-id="{conditional_escape(bound.id)}"' in first_tag:
-            return output  # Already marked (render_as_block calling render).
-    block_type = resolve_block_type(bound)
-    block_label = resolve_block_label(bound)
-    if scope.wrap and (not match or _is_multi_root_fragment(html)):
-        return _wrapper(bound, output if not match else mark_safe(html), block_type, block_label)
-    annotated, _ = _inject_attrs_into_root(output, bound.id, block_type, block_label)
-    return annotated
+    return mark_html(output, describe(bound, list_block=_list_parents.get(bound)), wrap=scope.wrap)
 
 
 class _ListChildProxy:
@@ -251,6 +254,8 @@ def _patched_render_as_block(self, context=None):
 def _patched_list_iter(self):
     if not is_marking():
         return _originals["ListValue.__iter__"](self)
+    for child in self.bound_blocks:
+        _list_parents[child] = self.list_block
     return iter(_ListChildProxy(child) for child in self.bound_blocks)
 
 

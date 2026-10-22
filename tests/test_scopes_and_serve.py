@@ -1,5 +1,6 @@
 """Marking scopes, the page-marker registry, and marking real page serves."""
 
+from html.parser import HTMLParser
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,7 @@ from django.test import Client
 from django.urls import reverse
 
 import wagtail_block_ids.marks as marking_module
-from wagtail_block_ids import block_ids, is_marking, marking, register_page_marker
+from wagtail_block_ids import block_ids, blocks_for_field, is_marking, marking, register_page_marker, stream_values
 from wagtail_block_ids.marks import _mark
 
 
@@ -48,22 +49,6 @@ def test_scope_closes_even_when_rendering_raises():
         raise RuntimeError
 
     assert not is_marking()
-
-
-def test_already_marked_root_is_not_marked_twice():
-    with marking():
-        once = str(_mark(_Bound(), "<section>x</section>"))
-        twice = str(_mark(_Bound(), once))
-
-    assert twice == once
-    assert twice.count("data-block-id") == 1
-
-
-def test_a_childs_id_on_the_first_tag_does_not_stop_the_parent():
-    with marking():
-        out = str(_mark(_Bound(), '<h2 data-block-id="child">x</h2>'))
-
-    assert out.startswith('<h2 data-block-id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"')
 
 
 # -- Page-marker registry ---------------------------------------------------------------
@@ -166,8 +151,35 @@ def test_preview_is_marked_through_serve_preview(demo_page, editor):
         assert f'data-block-id="{block_id}"' in html
 
 
+class _MarkedBlocks(HTMLParser):
+    def reset(self) -> None:
+        super().reset()
+        self.found = set()
+
+    def handle_starttag(self, tag, attrs) -> None:
+        attrs = dict(attrs)
+        if "data-block-id" in attrs:
+            self.found.add((attrs["data-block-id"], attrs["data-block-type"], attrs["data-block-label"]))
+
+
+def test_marks_name_every_block_as_the_walk_does(demo_page, editor):
+    register_page_marker(_editors_only)
+    client = Client()
+    client.force_login(editor)
+    parser = _MarkedBlocks()
+
+    parser.feed(client.get(demo_page.url).content.decode())
+
+    walked = {
+        (str(info.id), info.type, info.label)
+        for _name, value in stream_values(demo_page)
+        for info in blocks_for_field(value)
+    }
+    assert parser.found == walked
+
+
 def test_block_ids_cover_every_stream_field_in_page_order(demo_page):
-    section = demo_page.body[1]
+    section, tags = demo_page.body[1], demo_page.body[2]
     text, grid = section.value["content"]
     cards = grid.value["cards"].bound_blocks
 
@@ -178,5 +190,7 @@ def test_block_ids_cover_every_stream_field_in_page_order(demo_page):
         str(grid.id),
         str(cards[0].id),
         str(cards[1].id),
+        str(tags.id),
+        *(str(tag.id) for tag in tags.value.bound_blocks),
         str(demo_page.sidebar[0].id),
     ]

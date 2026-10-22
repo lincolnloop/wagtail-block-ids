@@ -1,66 +1,34 @@
-"""Block walk and labels, moved here from wagtail-inspect's ``test_block_map.py``.
+"""Block walk and labels, on real StreamField values (no database needed).
 
 - blocks_for_field yields stream children with correct uuid/type/label/parent
 - blocks_for_field yields list children under their stream-child parent
 - blocks_for_field recurses into StructBlock fields to find nested lists
 """
 
-import pytest
-from wagtail.blocks import CharBlock, ListBlock, StructBlock
-from wagtail.fields import StreamField as _StreamField
+from wagtail.blocks import CharBlock, ListBlock, StreamBlock, StructBlock
 
-from tests.block_map_fakes import (
-    _FakeListValue,
-    _FakePage,
-    _FakeStreamField,
-    _FakeStreamValue,
-    _FakeStructValue,
-    _ListChild,
-    _make_uuid,
-    _StreamChild,
-)
 from wagtail_block_ids.blocks import (
+    BlockInfo,
     _label_from_class_name,
     _parent_label_from_list_block,
     _singularize_name,
     blocks_for_field,
+    describe,
     resolve_block_type,
 )
 
-
-@pytest.fixture(autouse=True)
-def _patch_isinstance_for_fake_streamfield(monkeypatch):
-    """Make _FakeStreamField pass isinstance(field, StreamField)."""
-    import builtins
-
-    _original = builtins.isinstance
-
-    def _patched(obj, types):
-        if types is _StreamField and type(obj) is _FakeStreamField:
-            return True
-        return _original(obj, types)
-
-    monkeypatch.setattr(builtins, "isinstance", _patched)
+PARENT = "11111111-1111-1111-1111-111111111111"
+CHILD = "22222222-2222-2222-2222-222222222222"
+OTHER = "33333333-3333-3333-3333-333333333333"
 
 
-@pytest.fixture(autouse=True)
-def _patch_fake_page_meta(monkeypatch):
-    """Route _meta.get_fields() on _FakePage instances."""
+def _stream(name, block, value):
+    """A one-child StreamValue: *block* named *name*, holding raw *value*."""
+    return StreamBlock([(name, block)]).to_python([{"type": name, "id": PARENT, "value": value}])
 
-    class _Meta:
-        def __init__(self, page):
-            self._page = page
 
-        def get_fields(self):
-            return self._page._meta_get_fields()
-
-    original_init = _FakePage.__init__
-
-    def new_init(self, sv):
-        original_init(self, sv)
-        self._meta = _Meta(self)
-
-    monkeypatch.setattr(_FakePage, "__init__", new_init)
+def _items(*values, ids=(CHILD, OTHER)):
+    return [{"type": "item", "id": uid, "value": v} for uid, v in zip(ids, values, strict=False)]
 
 
 # ---------------------------------------------------------------------------
@@ -69,58 +37,43 @@ def _patch_fake_page_meta(monkeypatch):
 
 
 def test_blocks_for_field_yields_stream_child():
-    uid = _make_uuid()
-    sv = _FakeStreamValue([_StreamChild(uid, "hero", "Hero", "plain text")])
+    sv = _stream("hero", CharBlock(label="Hero"), "plain text")
 
-    entries = list(blocks_for_field(sv))
-
-    assert len(entries) == 1
-    assert entries[0] == (uid, "hero", "Hero", None)
+    assert list(blocks_for_field(sv)) == [BlockInfo(PARENT, "hero", "Hero", None)]
 
 
 def test_blocks_for_field_yields_list_children_under_stream_parent():
-    parent_id = _make_uuid()
-    child_id_1 = _make_uuid()
-    child_id_2 = _make_uuid()
+    """List children are named from the list's field name, singularized."""
+    sv = _stream("logos", ListBlock(CharBlock()), _items("img1", "img2"))
 
-    list_value = _FakeListValue(
-        [
-            _ListChild(child_id_1, "logo", "Logo", "img1"),
-            _ListChild(child_id_2, "logo", "Logo", "img2"),
-        ]
-    )
-    sv = _FakeStreamValue([_StreamChild(parent_id, "logo_cloud", "Logo Cloud", list_value)])
-
-    entries = list(blocks_for_field(sv))
-    ids = [e[0] for e in entries]
-
-    assert parent_id in ids
-    assert child_id_1 in ids
-    assert child_id_2 in ids
-    # children must report parent_id as their parent
-    child_entries = [e for e in entries if e[0] in (child_id_1, child_id_2)]
-    for entry in child_entries:
-        assert entry[3] == parent_id
+    assert list(blocks_for_field(sv)) == [
+        BlockInfo(PARENT, "logos", "Logos", None),
+        BlockInfo(CHILD, "logo", "Logo", PARENT),
+        BlockInfo(OTHER, "logo", "Logo", PARENT),
+    ]
 
 
 def test_blocks_for_field_recurses_into_struct_value():
-    parent_id = _make_uuid()
-    child_id = _make_uuid()
+    section = StructBlock([("items", ListBlock(CharBlock()))])
+    sv = _stream("section", section, {"items": _items("val")})
 
-    list_value = _FakeListValue([_ListChild(child_id, "item", "Item", "val")])
-    struct_value = _FakeStructValue({"items": list_value})
-    sv = _FakeStreamValue([_StreamChild(parent_id, "section", "Section", struct_value)])
-
-    entries = list(blocks_for_field(sv))
-    ids = [e[0] for e in entries]
-
-    assert parent_id in ids
-    assert child_id in ids
+    assert list(blocks_for_field(sv))[1] == BlockInfo(CHILD, "item", "Item", PARENT)
 
 
-# ---------------------------------------------------------------------------
-# flat_block_map_for_instance
-# ---------------------------------------------------------------------------
+def test_blocks_for_field_nested_struct_list_wires_parent_id():
+    """Stream → nested struct dicts → list yields list rows parented to the stream child."""
+    inner = StructBlock([("items", ListBlock(CharBlock()))])
+    outer = StructBlock([("section", inner)])
+    sv = _stream("outer", outer, {"section": {"items": _items("hi")}})
+
+    assert [info.parent_id for info in blocks_for_field(sv) if info.id == CHILD] == [PARENT]
+
+
+def test_blocks_for_field_items_unpack_as_four_tuples():
+    """Consumers unpack ``(uuid, type, label, parent_id)``."""
+    uid, block_type, label, parent_id = next(blocks_for_field(_stream("hero", CharBlock(), "x")))
+
+    assert (uid, block_type, label, parent_id) == (PARENT, "hero", "Hero", None)
 
 
 # ---------------------------------------------------------------------------
@@ -141,34 +94,25 @@ class StatItemBlock(StructBlock):
 
 def test_list_child_label_falls_back_to_class_name():
     """When label and name are empty, derive from the class name."""
-    parent_id = _make_uuid()
+    sv = _stream("grid", ListBlock(FeatureItemBlock()), _items({"title": "Hello"}))
 
-    list_block = ListBlock(FeatureItemBlock())
-    list_value = list_block.to_python([{"title": "Hello"}])
-
-    sv = _FakeStreamValue([_StreamChild(parent_id, "grid", "Grid", list_value)])
-    entries = list(blocks_for_field(sv))
-
-    child_entries = [e for e in entries if e[3] == parent_id]
-    assert len(child_entries) == 1
-    assert child_entries[0][2] == "Feature Item"
+    assert list(blocks_for_field(sv))[1].label == "Feature Item"
 
 
 def test_list_child_type_uses_label_slug_when_name_empty():
     """block_type should be a slug derived from the label."""
-    parent_id = _make_uuid()
+    sv = _stream("stats", ListBlock(StatItemBlock()), _items({"value_field": "99%"}))
 
-    block_cls = StatItemBlock
-    list_block = ListBlock(block_cls())
-    list_value = list_block.to_python([{"value_field": "99%"}])
+    assert list(blocks_for_field(sv))[1][1:3] == ("stat", "Stat")
 
-    sv = _FakeStreamValue([_StreamChild(parent_id, "stats", "Stats", list_value)])
-    entries = list(blocks_for_field(sv))
 
-    child_entries = [e for e in entries if e[3] == parent_id]
-    assert len(child_entries) == 1
-    assert child_entries[0][1] == "stat"  # type: slug of "Stat"
-    assert child_entries[0][2] == "Stat"  # label: from Meta.label
+def test_describe_needs_the_list_block_for_list_children():
+    list_block = ListBlock(CharBlock())
+    list_block.set_name("tags")
+    child = list_block.to_python(["news"]).bound_blocks[0]
+
+    assert describe(child, list_block=list_block)[1:3] == ("tag", "Tag")
+    assert describe(child)[1:3] == ("item", "Item")
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +133,11 @@ def test_singularize_name_leaves_faq_and_empty():
 def test_parent_label_from_list_block():
     lb = ListBlock(CharBlock())
     lb.set_name("faq_items")
-    lv = lb.to_python(["a"])
-    assert _parent_label_from_list_block(lv.list_block) == "Faq item"
+    assert _parent_label_from_list_block(lb) == "Faq item"
 
 
 def test_parent_label_from_list_block_empty_name():
-    lb = ListBlock(CharBlock())
-    assert _parent_label_from_list_block(lb) == ""
+    assert _parent_label_from_list_block(ListBlock(CharBlock())) == ""
 
 
 def test_resolve_block_type_prefers_holder_block_type():
@@ -241,18 +183,3 @@ def test_label_from_class_name_custom_block_class():
         title = CharBlock()
 
     assert _label_from_class_name(PromoTileBlock()) == "Promo Tile"
-
-
-def test_blocks_for_field_nested_struct_list_wires_parent_id():
-    """Stream → nested struct dicts → list yields list rows parented to the stream child."""
-    outer_id = _make_uuid()
-    item_id = _make_uuid()
-    list_value = _FakeListValue([_ListChild(item_id, "item", "Item", "hi")])
-    struct_inner = _FakeStructValue({"items": list_value})
-    struct_outer = _FakeStructValue({"section": struct_inner})
-    sv = _FakeStreamValue([_StreamChild(outer_id, "outer", "Outer", struct_outer)])
-
-    entries = list(blocks_for_field(sv))
-    item_entries = [e for e in entries if e[0] == item_id]
-    assert len(item_entries) == 1
-    assert item_entries[0][3] == outer_id

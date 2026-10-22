@@ -4,6 +4,7 @@ Moved here from wagtail-inspect (``block_map``), which re-exports these names.
 """
 
 import re
+from typing import NamedTuple
 
 from django.utils.text import capfirst
 from wagtail.blocks import StreamValue
@@ -64,12 +65,30 @@ def resolve_block_label(block_holder, parent_label=""):
     return parent_label or "Item"
 
 
+class BlockInfo(NamedTuple):
+    """A stream or list child as the walk yields it and the marks write it."""
+
+    id: str | None
+    type: str
+    label: str
+    parent_id: str | None = None
+
+
+def describe(child, *, list_block=None, parent_id=None):
+    """``BlockInfo`` for a stream or list child; list children need their *list_block*."""
+    parent_label = _parent_label_from_list_block(list_block) if list_block else ""
+    return BlockInfo(
+        getattr(child, "id", None),
+        resolve_block_type(child, parent_label),
+        resolve_block_label(child, parent_label),
+        parent_id,
+    )
+
+
 def blocks_for_field(stream_value, parent_id=None):
-    """Yield ``(uuid, block_type, block_label, parent_id)`` for stream/list nesting."""
+    """Yield a ``BlockInfo`` for every stream and list child, in page order."""
     for child in stream_value:
-        block_type = resolve_block_type(child)
-        block_label = resolve_block_label(child)
-        yield child.id, block_type, block_label, parent_id
+        yield describe(child, parent_id=parent_id)
         yield from _recurse_value(child.value, parent_id=child.id)
 
 
@@ -77,15 +96,10 @@ def _recurse_value(value, parent_id=None):
     if isinstance(value, StreamValue):
         yield from blocks_for_field(value, parent_id=parent_id)
     elif isinstance(value, ListValue):
-        list_block = getattr(value, "list_block", None)
-        parent_label = _parent_label_from_list_block(list_block) if list_block else ""
         for child in value.bound_blocks:
             if isinstance(child, str):
                 continue
-
-            block_type = resolve_block_type(child, parent_label)
-            block_label = resolve_block_label(child, parent_label)
-            yield child.id, block_type, block_label, parent_id
+            yield describe(child, list_block=value.list_block, parent_id=parent_id)
             yield from _recurse_value(child.value, parent_id=child.id)
     elif isinstance(value, dict):
         for field_value in value.values():
@@ -105,4 +119,4 @@ def stream_values(page):
 
 def block_ids(page):
     """UUIDs of every stream and list child on *page*, top-level and nested, in page order."""
-    return [str(uid) for _name, value in stream_values(page) for uid, *_rest in blocks_for_field(value) if uid]
+    return [str(info.id) for _name, value in stream_values(page) for info in blocks_for_field(value) if info.id]

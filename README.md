@@ -25,9 +25,11 @@ class MyAppConfig(AppConfig):
   returns true.
 - `marking(*, wrap=False)`: a context manager that marks everything rendered inside it.
 - `is_marking()`: whether a scope is open.
-- `blocks_for_field(stream_value)`, `stream_values(page)`, `block_ids(page)`,
-  `resolve_block_type(...)` and `resolve_block_label(...)`: walk StreamField values
-  the same way the marks are made.
+- `blocks_for_field(stream_value)`, `stream_values(page)` and `block_ids(page)`: walk
+  StreamField values. The walk yields `BlockInfo(id, type, label, parent_id)` named
+  tuples, named exactly as the marks are.
+- `describe(child, *, list_block=None)`: the `BlockInfo` for one stream or list child.
+  `resolve_block_type(...)` and `resolve_block_label(...)` are the rules it uses.
 
 ## Marking rules
 
@@ -58,5 +60,5 @@ event, so neither needs to know about the other:
 ```sh
 uv sync --extra testing
 uv run pytest
-uvx --with tox-uv tox   # Django 4.2–6.0 × Wagtail 5–7
+uvx --with tox-uv tox   # Django 4.2–6.0 × Wagtail 5–8
 ```

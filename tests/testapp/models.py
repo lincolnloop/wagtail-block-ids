@@ -38,6 +38,13 @@ class DemoPage(Page):
         [
             ("heading", blocks.CharBlock(template="testapp/blocks/heading.html")),
             ("section", SectionBlock()),
+            (
+                "tags",
+                blocks.ListBlock(
+                    blocks.CharBlock(template="testapp/blocks/tag.html"),
+                    template="testapp/blocks/tags.html",
+                ),
+            ),
         ],
         blank=True,
         use_json_field=True,

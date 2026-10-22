@@ -1,0 +1,7 @@
+{% load wagtailcore_tags %}
+
+<ul class="tags">
+  {% for tag in value %}
+    {% include_block tag %}
+  {% endfor %}
+</ul>
