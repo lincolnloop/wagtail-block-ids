@@ -39,7 +39,7 @@ class MyAppConfig(AppConfig):
   block with no root element stays unmarked. Wrappers can break grid and flex layouts.
 - Requests no marker accepts are untouched.
 
-## One block mode at a time
+## Sharing the page between block tools
 
 Tools that highlight blocks on hover (inspect, live comments) must not run at once,
 or every hover and click is handled twice. They coordinate in the browser with one
@@ -48,6 +48,10 @@ event, so neither needs to know about the other:
 - When a mode turns on, dispatch on `document`:
   `new CustomEvent("wagtail-block-ids:mode-on", { detail: { source: "<your package>" } })`.
 - Listen for that event, and turn your mode off when `detail.source` isn't yours.
+- Mark your own UI that sits on the page (comment pins, popovers) with
+  `data-block-ids-ignore`, and never give it `data-block-id`. Block modes ignore
+  hovers, clicks and keys on anything inside `[data-block-ids-ignore]`, so it is not
+  highlighted, and it doesn't count as part of the block it sits in.
 
 ## Development
 
