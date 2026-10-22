@@ -39,6 +39,16 @@ class MyAppConfig(AppConfig):
   block with no root element stays unmarked. Wrappers can break grid and flex layouts.
 - Requests no marker accepts are untouched.
 
+## One block mode at a time
+
+Tools that highlight blocks on hover (inspect, live comments) must not run at once,
+or every hover and click is handled twice. They coordinate in the browser with one
+event, so neither needs to know about the other:
+
+- When a mode turns on, dispatch on `document`:
+  `new CustomEvent("wagtail-block-ids:mode-on", { detail: { source: "<your package>" } })`.
+- Listen for that event, and turn your mode off when `detail.source` isn't yours.
+
 ## Development
 
 ```sh
